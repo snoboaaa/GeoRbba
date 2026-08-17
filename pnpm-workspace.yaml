@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/js/*
+
+ignoredBuiltDependencies:
+  - '@swc/core'
+  - core-js
+  - core-js-pure
+  - es5-ext
+  - esbuild
+  - sharp

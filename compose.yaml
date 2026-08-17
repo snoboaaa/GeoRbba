@@ -1,0 +1,639 @@
+# =============================================================================
+# GOAT Docker Compose
+# =============================================================================
+# Profiles:
+#   - (none): Infrastructure only (db, minio, rabbitmq, redis, windmill-server,
+#             windmill-worker-default)
+#   - dev: + devcontainer, tools worker with local goatlib mount, print worker
+#   - prod: + core, geoapi, web, processes, tools/print workers, init scripts
+#
+# Usage:
+#   docker compose up                    # Infrastructure only
+#   docker compose --profile dev up      # + dev environment
+#   docker compose --profile prod up     # + production services
+# =============================================================================
+
+x-env-base: &env-base
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_SERVER: ${POSTGRES_SERVER}
+  S3_PROVIDER: ${S3_PROVIDER}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+  S3_REGION: ${S3_REGION}
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL}
+
+x-env-core: &env-core
+  <<: *env-base
+  AUTH: ${AUTH}
+  POSTGRES_DB: goat
+  REGION_MAPPING_PT_TABLE: basic.region_mapping_pt_04022025
+
+x-env-windmill: &env-windmill
+  DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_SERVER}:5432/windmill?sslmode=disable
+  DISABLE_NSJAIL: "true"
+
+x-env-print: &env-print
+  MODE: worker
+  WORKER_GROUP: print
+  WORKER_TAGS: print
+  JOB_DEFAULT_TIMEOUT: 300
+  PYTHONDONTWRITEBYTECODE: "1"
+  WHITELIST_ENVS: "POSTGRES_SERVER,POSTGRES_USER,POSTGRES_PASSWORD,POSTGRES_DB,DUCKLAKE_DATA_DIR,DUCKLAKE_CATALOG_SCHEMA,S3_PROVIDER,S3_ENDPOINT_URL,S3_PUBLIC_ENDPOINT_URL,S3_ACCESS_KEY_ID,S3_SECRET_ACCESS_KEY,S3_BUCKET_NAME,S3_REGION,PRINT_BASE_URL,KEYCLOAK_SERVER_URL,REALM_NAME,KEYCLOAK_CLIENT_ID,KEYCLOAK_CLIENT_SECRET,ATLAS_BATCH_SIZE"
+  ATLAS_BATCH_SIZE: ${ATLAS_BATCH_SIZE:-2}
+  POSTGRES_SERVER: ${POSTGRES_SERVER}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: goat
+  DUCKLAKE_DATA_DIR: /app/data/ducklake
+  DUCKLAKE_CATALOG_SCHEMA: ducklake
+  S3_PROVIDER: ${S3_PROVIDER:-hetzner}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-${S3_ENDPOINT_URL}}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  KEYCLOAK_SERVER_URL: ${KEYCLOAK_SERVER_URL:-https://auth.dev.plan4better.de}
+  REALM_NAME: ${REALM_NAME:-p4b}
+  KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-goat}
+  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+
+x-env-tools: &env-tools
+  <<: *env-windmill
+  MODE: worker
+  WORKER_GROUP: tools
+  WORKER_TAGS: tools
+  JOB_DEFAULT_TIMEOUT: 600
+  PYTHONDONTWRITEBYTECODE: "1"
+  WHITELIST_ENVS: "POSTGRES_SERVER,POSTGRES_PORT,POSTGRES_USER,POSTGRES_PASSWORD,POSTGRES_DB,POSTGRES_DATABASE_URI,DUCKLAKE_DATA_DIR,DUCKLAKE_CATALOG_SCHEMA,TILES_DATA_DIR,S3_PROVIDER,S3_ENDPOINT_URL,S3_PUBLIC_ENDPOINT_URL,S3_ACCESS_KEY_ID,S3_SECRET_ACCESS_KEY,S3_BUCKET_NAME,S3_REGION,OD_MATRIX_BASE_PATH,STREET_NETWORK_EDGES_BASE_PATH,STREET_NETWORK_NODES_BASE_PATH,PT_NETWORK_BASE_PATH,GTFS_DATA_PATH,GEOCODING_URL,GEOCODING_AUTHORIZATION"
+  POSTGRES_SERVER: ${POSTGRES_SERVER}
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_DATABASE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_SERVER}:5432/${POSTGRES_DB}
+  DUCKLAKE_DATA_DIR: /app/data/ducklake
+  DUCKLAKE_CATALOG_SCHEMA: ducklake
+  TILES_DATA_DIR: /app/data/tiles
+  S3_PROVIDER: ${S3_PROVIDER:-hetzner}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-${S3_ENDPOINT_URL}}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  OD_MATRIX_BASE_PATH: /app/data/traveltime_matrices
+  STREET_NETWORK_EDGES_BASE_PATH: ${STREET_NETWORK_EDGES_BASE_PATH:-/app/data/street_network/edges}
+  STREET_NETWORK_NODES_BASE_PATH: ${STREET_NETWORK_NODES_BASE_PATH:-/app/data/street_network/nodes}
+  PT_NETWORK_BASE_PATH: ${PT_NETWORK_BASE_PATH:-/app/data/pt_network/latest_de.bin}
+  GTFS_DATA_PATH: /app/data/gtfs
+  GEOCODING_URL: ${GEOCODING_URL}
+  GEOCODING_AUTHORIZATION: ${GEOCODING_AUTHORIZATION}
+
+x-env-workflows: &env-workflows
+  <<: *env-windmill
+  MODE: worker
+  WORKER_GROUP: workflows
+  WORKER_TAGS: workflows
+  JOB_DEFAULT_TIMEOUT: 1800 # 30 min for long workflow chains
+  PYTHONDONTWRITEBYTECODE: "1"
+  WHITELIST_ENVS: "POSTGRES_SERVER,POSTGRES_PORT,POSTGRES_USER,POSTGRES_PASSWORD,POSTGRES_DB,POSTGRES_DATABASE_URI,DUCKLAKE_DATA_DIR,DUCKLAKE_CATALOG_SCHEMA,TILES_DATA_DIR,S3_PROVIDER,S3_ENDPOINT_URL,S3_PUBLIC_ENDPOINT_URL,S3_ACCESS_KEY_ID,S3_SECRET_ACCESS_KEY,S3_BUCKET_NAME,S3_REGION,OD_MATRIX_BASE_PATH,STREET_NETWORK_EDGES_BASE_PATH,STREET_NETWORK_NODES_BASE_PATH,PT_NETWORK_BASE_PATH,GTFS_DATA_PATH,GEOCODING_URL,GEOCODING_AUTHORIZATION"
+  POSTGRES_SERVER: ${POSTGRES_SERVER}
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_DATABASE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_SERVER}:5432/${POSTGRES_DB}
+  DUCKLAKE_DATA_DIR: /app/data/ducklake
+  DUCKLAKE_CATALOG_SCHEMA: ducklake
+  TILES_DATA_DIR: /app/data/tiles
+  S3_PROVIDER: ${S3_PROVIDER:-hetzner}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-${S3_ENDPOINT_URL}}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  OD_MATRIX_BASE_PATH: /app/data/traveltime_matrices
+  STREET_NETWORK_EDGES_BASE_PATH: ${STREET_NETWORK_EDGES_BASE_PATH:-/app/data/street_network/edges}
+  STREET_NETWORK_NODES_BASE_PATH: ${STREET_NETWORK_NODES_BASE_PATH:-/app/data/street_network/nodes}
+  PT_NETWORK_BASE_PATH: ${PT_NETWORK_BASE_PATH:-/app/data/pt_network/latest_de.bin}
+  GTFS_DATA_PATH: /app/data/gtfs
+  GEOCODING_URL: ${GEOCODING_URL}
+  GEOCODING_AUTHORIZATION: ${GEOCODING_AUTHORIZATION}
+
+x-worker-tools-base: &worker-tools-base
+  image: ghcr.io/plan4better/goat/windmill-worker-tools:latest
+  build:
+    context: .
+    dockerfile: apps/processes/workers/Dockerfile
+    target: worker-tools
+  restart: unless-stopped
+  networks:
+    - goat
+  environment:
+    <<: *env-tools
+  deploy:
+    resources:
+      limits:
+        cpus: "2"
+        memory: 4G
+  depends_on:
+    - windmill-server
+
+x-worker-workflows-base: &worker-workflows-base
+  image: ghcr.io/plan4better/goat/windmill-worker-tools:latest
+  build:
+    context: .
+    dockerfile: apps/processes/workers/Dockerfile
+    target: worker-tools
+  restart: unless-stopped
+  networks:
+    - goat
+  environment:
+    <<: *env-workflows
+  depends_on:
+    - windmill-server
+
+x-worker-print-base: &worker-print-base
+  image: ghcr.io/plan4better/goat/windmill-worker-print:latest
+  build:
+    context: .
+    dockerfile: apps/processes/workers/Dockerfile
+    target: worker-print
+  restart: unless-stopped
+  depends_on:
+    - windmill-server
+
+x-service-core: &service-core
+  image: ghcr.io/plan4better/goat/core:latest
+  build:
+    context: .
+    dockerfile: apps/core/Dockerfile
+  environment:
+    <<: *env-core
+  depends_on:
+    db:
+      condition: service_healthy
+      restart: true
+    minio:
+      condition: service_healthy
+      restart: true
+
+networks:
+  goat:
+    name: goat
+
+volumes:
+  goat-data:
+
+services:
+  # ===========================================================================
+  # Infrastructure (always on)
+  # ===========================================================================
+
+  db:
+    image: ghcr.io/plan4better/docker-images/postgres:20251111-8198082
+    container_name: goat-db
+    restart: always
+    networks:
+      - goat
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rds -d goat -h 127.0.0.1"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    environment:
+      DB_INSTANCE_NAME: goat-prod-db-master
+      PGUSER: ${POSTGRES_USER}
+      DB_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      DB_DATABASE_goat: goat
+      DB_USERNAME_goat: ${POSTGRES_USER}
+      DB_PASSWORD_goat: ${POSTGRES_PASSWORD}
+      DB_DATABASE_keycloak: keycloak
+      DB_USERNAME_keycloak: ${POSTGRES_USER}
+      DB_PASSWORD_keycloak: ${POSTGRES_PASSWORD}
+      DB_DATABASE_windmill: windmill
+      DB_USERNAME_windmill: ${POSTGRES_USER}
+      DB_PASSWORD_windmill: ${POSTGRES_PASSWORD}
+      DB_DATABASE_ducklake: ducklake
+      DB_USERNAME_ducklake: ${POSTGRES_USER}
+      DB_PASSWORD_ducklake: ${POSTGRES_PASSWORD}
+      DISABLE_BACKUP: 1
+      DB_INIT_SQL_goat: /rds/init/init-db.sql
+      DB_POSTGRES_EXTRA_CONFIG: |
+        max_connections = 200
+        shared_buffers = 4GB
+        effective_cache_size = 12GB
+        maintenance_work_mem = 2GB
+        checkpoint_completion_target = 0.9
+        wal_buffers = 32MB
+        default_statistics_target = 100
+        random_page_cost = 1.1
+        effective_io_concurrency = 200
+        work_mem = 26214kB
+        min_wal_size = 2GB
+        max_wal_size = 8GB
+        max_worker_processes = 8
+        max_parallel_workers_per_gather = 4
+        max_parallel_workers = 4
+        max_parallel_maintenance_workers = 2
+        shared_preload_libraries = 'citus,pg_cron'
+    ports:
+      - 5432:5432
+    volumes:
+      - goat-data:/storage/data
+      - ./scripts/db/init-db.sql:/rds/init/init-db.sql:ro
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: goat-minio
+    restart: always
+    networks:
+      - goat
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: ["server", "--console-address", ":9001", "/data/s3"]
+    volumes:
+      - goat-data:/data
+    healthcheck:
+      test: "mc ready local"
+      interval: 2s
+      timeout: 10s
+      retries: 5
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+      MINIO_DOMAIN: ${S3_PUBLIC_ENDPOINT_URL}
+
+  minio-buckets:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    networks:
+      - goat
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: on-failure
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set p4b http://minio:9000 ${S3_ACCESS_KEY_ID} ${S3_SECRET_ACCESS_KEY};
+      /usr/bin/mc mb p4b/${S3_BUCKET_NAME};
+      exit 0;
+      "
+
+  rabbitmq:
+    image: rabbitmq:4.0.3-management
+    networks:
+      - goat
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+  redis:
+    image: redis:7.4.1-alpine
+    networks:
+      - goat
+    ports:
+      - 6379:6379
+    command: redis-server --maxmemory 100mb --maxmemory-policy allkeys-lru
+
+  # ===========================================================================
+  # Windmill - Workflow Engine (always on)
+  # ===========================================================================
+
+  windmill-server:
+    image: ghcr.io/plan4better/goat/windmill-server:latest
+    build:
+      context: .
+      dockerfile: apps/processes/workers/Dockerfile
+      target: server
+    networks:
+      - goat
+    environment:
+      <<: *env-windmill
+      MODE: server
+      BASE_URL: http://localhost:8110
+    ports:
+      - 8110:8000
+    depends_on:
+      db:
+        condition: service_healthy
+
+  windmill-worker-default:
+    image: ghcr.io/plan4better/goat/windmill-worker-default:latest
+    build:
+      context: .
+      dockerfile: apps/processes/workers/Dockerfile
+      target: worker-default
+    restart: unless-stopped
+    networks:
+      - goat
+    environment:
+      <<: *env-windmill
+      MODE: worker
+      WORKER_GROUP: default
+      JOB_DEFAULT_TIMEOUT: 300
+    depends_on:
+      - windmill-server
+
+  # ===========================================================================
+  # Windmill Workers - Analytics & Print (profile: prod/dev)
+  # ===========================================================================
+
+  # Tools worker (analytics: buffer, heatmap, isochrone, etc.)
+  windmill-worker-tools:
+    profiles: [prod]
+    <<: *worker-tools-base
+    volumes:
+      - goat-data:/app/data
+
+  windmill-worker-tools-dev:
+    profiles: [dev]
+    <<: *worker-tools-base
+    volumes:
+      - ./packages/python/goatlib/src/goatlib:/venv/lib/python3.11/site-packages/goatlib:ro
+      - goat-data:/app/data
+
+  # Workflows worker (workflow orchestration - long-running jobs)
+  windmill-worker-workflows:
+    profiles: [prod]
+    <<: *worker-workflows-base
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    volumes:
+      - goat-data:/app/data
+
+  windmill-worker-workflows-dev:
+    profiles: [dev]
+    <<: *worker-workflows-base
+    deploy:
+      replicas: 5
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    volumes:
+      - ./packages/python/goatlib/src/goatlib:/venv/lib/python3.11/site-packages/goatlib:ro
+      - goat-data:/app/data
+
+  # Print worker (PDF reports, thumbnails)
+  windmill-worker-print:
+    profiles: [prod]
+    <<: *worker-print-base
+    networks:
+      - goat
+    environment:
+      <<: [*env-windmill, *env-print]
+      PRINT_BASE_URL: ${PRINT_BASE_URL:-http://web:3000}
+    volumes:
+      - goat-data:/app/data:ro
+
+  windmill-worker-print-dev:
+    profiles: [dev]
+    <<: *worker-print-base
+    # Share network with goat-dev so localhost reaches dev services
+    network_mode: "service:goat-dev"
+    environment:
+      <<: *env-print
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/windmill?sslmode=disable
+      DISABLE_NSJAIL: "true"
+      PRINT_BASE_URL: http://localhost:3000
+    volumes:
+      - ./packages/python/goatlib/src/goatlib:/venv/lib/python3.11/site-packages/goatlib:ro
+      - goat-data:/app/data:ro
+
+  # ===========================================================================
+  # Development Environment (profile: dev)
+  # ===========================================================================
+
+  goat-dev:
+    profiles: [dev]
+    build:
+      context: .devcontainer
+      dockerfile: Dockerfile
+    container_name: goat-dev
+    networks:
+      - goat
+    volumes:
+      - .:/app
+      - goat-data:/app/data
+    depends_on:
+      - db
+      - minio
+      - minio-buckets
+      - rabbitmq
+      - redis
+      - windmill-server
+      - windmill-worker-default
+      - windmill-worker-tools-dev
+      - windmill-worker-workflows-dev
+    command: sleep infinity
+
+  # ===========================================================================
+  # Initialization Services (profile: prod) - run once on startup
+  # ===========================================================================
+
+  core-migrate:
+    profiles: [prod]
+    <<: *service-core
+    container_name: goat-core-migrate
+    networks:
+      - goat
+    restart: "no"
+    command: bash -c "cd apps/core && src/core/scripts/prestart.sh"
+
+  ducklake-init:
+    profiles: [prod]
+    image: ghcr.io/plan4better/goat/windmill-worker-tools:latest
+    build:
+      context: .
+      dockerfile: apps/processes/workers/Dockerfile
+      target: worker-tools
+    container_name: goat-ducklake-init
+    networks:
+      - goat
+    restart: "no"
+    environment:
+      POSTGRES_SERVER: ${POSTGRES_SERVER}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: goat
+      DUCKLAKE_DATA_DIR: /app/data/ducklake
+      DUCKLAKE_CATALOG_SCHEMA: ducklake
+      S3_PROVIDER: ${S3_PROVIDER:-minio}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+    volumes:
+      - ./scripts/db/init-ducklake.py:/app/init-ducklake.py:ro
+      - goat-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: python /app/init-ducklake.py
+
+  windmill-init:
+    profiles: [prod]
+    image: python:3.11-slim
+    container_name: goat-windmill-init
+    networks:
+      - goat
+    restart: "no"
+    environment:
+      WINDMILL_URL: http://windmill-server:8000
+      WINDMILL_WORKSPACE: goat
+      WINDMILL_ADMIN_EMAIL: ${WINDMILL_ADMIN_EMAIL:-admin@windmill.dev}
+      WINDMILL_ADMIN_PASSWORD: ${WINDMILL_ADMIN_PASSWORD:-changeme}
+      WINDMILL_TOKEN_FILE: /app/data/windmill/.token
+    volumes:
+      - ./scripts/windmill/init-windmill.py:/app/init-windmill.py:ro
+      - goat-data:/app/data
+    depends_on:
+      windmill-server:
+        condition: service_started
+    command: python /app/init-windmill.py
+
+  windmill-sync:
+    profiles: [prod]
+    image: ghcr.io/plan4better/goat/windmill-worker-tools:latest
+    build:
+      context: .
+      dockerfile: apps/processes/workers/Dockerfile
+      target: worker-tools
+    container_name: goat-windmill-sync
+    networks:
+      - goat
+    restart: "no"
+    environment:
+      WINDMILL_URL: http://windmill-server:8000
+      WINDMILL_WORKSPACE: goat
+      WINDMILL_TOKEN_FILE: /app/data/windmill/.token
+    volumes:
+      - goat-data:/app/data:ro
+      - ./scripts/windmill:/app/scripts/windmill:ro
+    depends_on:
+      windmill-init:
+        condition: service_completed_successfully
+    command: /bin/bash /app/scripts/windmill/sync-tools.sh
+
+  # ===========================================================================
+  # Application Services (profile: prod)
+  # ===========================================================================
+
+  core:
+    profiles: [prod]
+    <<: *service-core
+    container_name: goat-core
+    networks:
+      - goat
+    restart: always
+    ports:
+      - 8000:8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthz"]
+      interval: 120s
+      timeout: 60s
+      retries: 3
+      start_period: 20s
+
+  geoapi:
+    profiles: [prod]
+    image: ghcr.io/plan4better/goat/geoapi:latest
+    build:
+      context: .
+      dockerfile: apps/geoapi/Dockerfile
+    container_name: goat-geoapi
+    restart: always
+    networks:
+      - goat
+    ports:
+      - 8100:8000
+    environment:
+      <<: *env-core
+      TILES_DATA_DIR: /app/data/tiles
+    volumes:
+      - goat-data:/app/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      ducklake-init:
+        condition: service_completed_successfully
+
+  processes:
+    profiles: [prod]
+    image: ghcr.io/plan4better/goat/processes:latest
+    build:
+      context: .
+      dockerfile: apps/processes/Dockerfile
+    container_name: goat-processes
+    restart: always
+    networks:
+      - goat
+    ports:
+      - 8300:8000
+    environment:
+      <<: *env-core
+      WINDMILL_URL: http://windmill-server:8000
+      WINDMILL_WORKSPACE: goat
+      WINDMILL_TOKEN: ${WINDMILL_TOKEN:-}
+      WINDMILL_TOKEN_FILE: /app/data/windmill/.token
+      DUCKLAKE_DATA_DIR: /app/data/ducklake
+      DUCKLAKE_CATALOG_SCHEMA: ducklake
+      TILES_DATA_DIR: /app/data/tiles
+      TRAVELTIME_MATRICES_DIR: /app/data/traveltime_matrices
+    volumes:
+      - goat-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      ducklake-init:
+        condition: service_completed_successfully
+      windmill-sync:
+        condition: service_completed_successfully
+      windmill-server:
+        condition: service_started
+
+  web:
+    profiles: [prod]
+    image: ghcr.io/plan4better/goat/web:latest
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: goat-web
+    restart: always
+    networks:
+      - goat
+    ports:
+      - 3000:3000
+    environment:
+      NEXT_PUBLIC_APP_URL: ${NEXTAUTH_URL}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_GEOAPI_URL: ${NEXT_PUBLIC_GEOAPI_URL}
+      NEXT_PUBLIC_PROCESSES_URL: ${NEXT_PUBLIC_PROCESSES_URL}
+      NEXT_PUBLIC_DOCS_URL: ${NEXT_PUBLIC_DOCS_URL}
+      NEXT_PUBLIC_APP_ENVIRONMENT: ${ENVIRONMENT}
+      NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN}
+      NEXT_PUBLIC_KEYCLOAK_ISSUER: ${KEYCLOAK_SERVER_URL}/realms/${REALM_NAME}
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      # Same AUTH flag as the backend services: NEXT_PUBLIC_AUTH is substituted
+      # into the client bundle by entrypoint.sh; AUTH is read by the middleware.
+      NEXT_PUBLIC_AUTH: ${AUTH:-True}
+      AUTH: ${AUTH:-True}
+      API_URL: ${NEXT_PUBLIC_API_URL}
+    depends_on:
+      - core

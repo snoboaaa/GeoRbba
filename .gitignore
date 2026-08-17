@@ -1,0 +1,105 @@
+# MCP config (contains tokens)
+.mcp.json
+
+# Superpowers brainstorm sessions
+.superpowers/
+docs/superpowers/
+
+# Playwright
+test-results/
+
+# Superpowers brainstorm sessions
+.superpowers/
+docs/superpowers/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lint-results
+
+## Dependency directories
+**/bin/
+**/obj/
+**/node_modules/
+**/bower_components/
+**/wwwroot/lib/*
+
+# dependencies
+node_modules
+.pnp
+.pnp.js
+.pnpm-store/
+
+# testing
+coverage
+
+# next.js
+.next/
+out/
+!apps/docs/**/out/
+build
+
+# misc
+.DS_Store
+*.pem
+compose.override.yaml
+
+# local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# turbo
+.turbo
+
+# vercel
+.vercel
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+dist/
+wheels/
+*.egg-info
+.ruff_cache/
+.venv
+.pytest_cache/
+
+# others
+compose.override.yaml
+build_keycloak
+storybook-static
+*.jar
+/.idea
+cache
+
+# Git worktrees
+.worktrees/
+
+# Playwright MCP browser-session artifacts
+.playwright-mcp/
+
+# Local nigiri builds (SDK is fetched automatically during cmake build)
+packages/cpp/nigiri/
+
+apps/core/data/*
+python_modules/
+# Rust packages (experimental)
+packages/rust/fast-routing/target/
+packages/python/goatlib/tests/result/*
+!packages/python/goatlib/tests/result/.gitkeep
+# Test
+.coverage
+
+data/*
+
+migration_scripts/*
+
+base_networks/*
+
+/tmp/**
